@@ -1,4 +1,4 @@
-"""The request history (serve/history.py): records -> conversations, the local spool, the ssh mirror, and the two
+﻿"""The request history (serve/history.py): records -> conversations, the local spool, the ssh mirror, and the two
 HTTP endpoints the web app's popup reads.  No GPU and no network: a fake stands in for the cloud's ssh."""
 import json
 import time
@@ -187,7 +187,7 @@ class OverHttp(unittest.TestCase):
         while time.time() < end and not spool.exists():     # the server appends right after the response
             time.sleep(0.05)
         self.assertIn("Hello?", spool.read_text(encoding="utf-8"))   # kept even with the monitor off
-        code, data = self.request("/history?fresh=1")
+        code, data = self.request("/requests?fresh=1")
         self.assertEqual(code, 200)
         self.assertTrue(data["enabled"])
         self.assertEqual(data["source"], "cloud")
@@ -195,18 +195,18 @@ class OverHttp(unittest.TestCase):
         conv = data["conversations"][0]
         self.assertEqual(conv["q"], "Hello?")
         self.assertIn("The mock answer.", conv["a"])
-        code, detail = self.request("/history/conversation?id=" + conv["id"])
+        code, detail = self.request("/requests/conversation?id=" + conv["id"])
         self.assertEqual(code, 200)
         msgs = detail["conversation"]["messages"]
         self.assertEqual([m["role"] for m in msgs], ["user", "assistant"])
         self.assertIn("The mock answer.", msgs[-1]["text"])
         self.assertIn("Short thought.", msgs[-1]["reasoning"])
-        self.assertEqual(self.request("/history/conversation?id=nope")[0], 404)
+        self.assertEqual(self.request("/requests/conversation?id=nope")[0], 404)
 
     def test_without_a_config_the_endpoints_say_so(self):
         self.svc.request_history = None
-        self.assertEqual(self.request("/history"), (200, {"enabled": False}))
-        self.assertEqual(self.request("/history/conversation?id=x"), (200, {"enabled": False}))
+        self.assertEqual(self.request("/requests"), (200, {"enabled": False}))
+        self.assertEqual(self.request("/requests/conversation?id=x"), (200, {"enabled": False}))
 
 
 if __name__ == "__main__":

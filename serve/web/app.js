@@ -147,6 +147,7 @@ function renderEmptyChat() {
 async function loadHealth() {
   try {
     health = await (await fetch("health")).json();
+    loadTunnel();
     renderEmptyChat();
     $("tab-btn-images").hidden = !health.image_generation;
     if (location.hash === "#images" && health.image_generation) showTab("images");
@@ -1613,7 +1614,7 @@ $("drawer-close").onclick = () => openDrawer(false);
 $("scrim").onclick = () => openDrawer(false);
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && $("drawer").dataset.open === "true") openDrawer(false); });
 
-// ------------------------------------------------------------------ chat history (GET /history)
+// ------------------------------------------------------------------ chat history (GET /requests)
 // The Recent requests card's history button: a read-only browser over every request this server kept.  The
 // records live in .history/ on this PC and are mirrored to the reverse-SSH host (serve/history.py); the list and
 // each conversation are read back from that mirror - nothing here can edit or delete anything.
@@ -1645,7 +1646,7 @@ async function openHistory() {
   $("hist-list").innerHTML = "";
   let data;
   try {
-    const r = await fetch("history?fresh=1", {headers: headers()});
+    const r = await fetch("requests?fresh=1", {headers: headers()});
     if (r.status === 401) { histFail("This server needs an API key: add it under About > Settings."); return; }
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     data = await r.json();
@@ -1698,7 +1699,7 @@ async function showConversation(id) {
   $("hist-view").innerHTML = `<p class="hist__empty">Loading&hellip;</p>`;
   let data;
   try {
-    const r = await fetch("history/conversation?id=" + encodeURIComponent(id), {headers: headers()});
+    const r = await fetch("requests/conversation?id=" + encodeURIComponent(id), {headers: headers()});
     if (r.status === 404) { $("hist-view").innerHTML = `<p class="hist__empty">This conversation is no longer kept.</p>`; return; }
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     data = await r.json();
@@ -1811,7 +1812,6 @@ async function start() {
     autosize();
   }
   loadHealth().then(loadMcp);
-  loadTunnel();
   showTab(location.hash.slice(1) || "chat");
   if (startQuestion && tab === "chat") $("input").focus();
   poll();

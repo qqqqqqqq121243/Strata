@@ -4,8 +4,8 @@
     python -m serve.server --engine strata --config strata.json --port 8080   (the real engine, resident)
 
 Endpoints: POST /v1/chat/completions (OpenAI, stream and non-stream), POST /v1/messages (Anthropic, stream and
-non-stream), GET /v1/models, GET /models, GET /props, GET /slots, GET /health, GET /mcp, GET /tunnel, GET /history,
-GET /history/conversation. One sequence at a time behind a FIFO (plan: one resident sequence).
+non-stream), GET /v1/models, GET /models, GET /props, GET /slots, GET /health, GET /mcp, GET /tunnel, GET /requests,
+GET /requests/conversation. One sequence at a time behind a FIFO (plan: one resident sequence).
 Image generation (optional, when the config has an "images" section): POST /v1/images/generations (OpenAI's shape,
 plus seed and steps) runs stable-diffusion.cpp's sd-cli for Qwen-Image-2.1-Turbo, one job at a time on the GPU the
 text engine uses (serve/images.py).
@@ -8078,7 +8078,7 @@ def make_handler(svc: Service):
                     tunnel = getattr(svc, "tunnel", None)
                     self._json(200, tunnel.status() if tunnel else {"enabled": False, "state": "off"})
                 return
-            if path == "/history":
+            if path == "/requests":
                 # the request history's conversations (serve/history.py): read-only, from the mirror on the
                 # reverse-SSH host - the web app's Recent requests card browses them (?fresh=1: read it again)
                 if self._authorized():
@@ -8086,7 +8086,7 @@ def make_handler(svc: Service):
                     self._json(200, svc.request_history.overview(fresh=fresh) if svc.request_history
                                else {"enabled": False})
                 return
-            if path == "/history/conversation":
+            if path == "/requests/conversation":
                 if self._authorized():
                     history = svc.request_history
                     if history is None or not history.enabled:
@@ -10438,7 +10438,7 @@ def _main(argv=None, *, lifecycle_event=None, interrupt_exit_code: int = 0) -> i
               flush=True)
     tunnel.start()
     # the request history (serve/history.py): every request's content in .history/, mirrored over ssh to the
-    # reverse-SSH host; the web app's Recent requests card reads it back (GET /history)
+    # reverse-SSH host; the web app's Recent requests card reads it back (GET /requests)
     request_history = History.from_config(a.reverse_ssh)
     svc.request_history = request_history
     if request_history.enabled:

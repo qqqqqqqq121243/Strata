@@ -12,8 +12,8 @@ reused.  Optional keys: "history": false turns this service off, "history_dir" i
 "strata-history"), "ssh" the client program (default "ssh").
 
 The web app's Recent requests card browses the mirror read-only:
-    GET /history                    one summary per conversation: first question, last answer, tokens ...
-    GET /history/conversation?id=   the whole conversation: every message, thinking blocks, per-answer numbers
+    GET /requests                    one summary per conversation: first question, last answer, tokens ...
+    GET /requests/conversation?id=   the whole conversation: every message, thinking blocks, per-answer numbers
 The conversation is the group of requests that started from the same first question (served at the same path).
 The mirror is fetched over ssh and cached for a few seconds; when the cloud does not answer, the local spool
 answers instead, and records that are spooled but not yet mirrored are merged in by record id, so an answer is
@@ -281,7 +281,7 @@ class History:
         self._wake.set()                                # mirror it now, ahead of the next poll
 
     def overview(self, fresh: bool = False) -> dict:
-        """GET /history: the conversation list (with where the answer came from).  fresh: read the mirror again
+        """GET /requests: the conversation list (with where the answer came from).  fresh: read the mirror again
         even if the cached copy is young (the popup just opened)."""
         if not self.enabled:
             return {"enabled": False, "error": self._config_error}
@@ -294,7 +294,7 @@ class History:
         return out
 
     def conversation(self, cid) -> dict | None:
-        """GET /history/conversation: one conversation in full; None when there is no such id."""
+        """GET /requests/conversation: one conversation in full; None when there is no such id."""
         if not self.enabled or not cid:
             return None
         source, records, error = self._load()
