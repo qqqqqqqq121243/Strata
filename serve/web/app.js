@@ -106,6 +106,36 @@ function saveApiKey(notify = false) {
 $("api-key").oninput = () => saveApiKey();
 $("api-key").onchange = () => saveApiKey(true);
 
+// ------------------------------------------------------------------ reverse SSH tunnel (GET /tunnel)
+// The header badge: whether serve/reverse_ssh.py's `ssh -R` is up, so this PC's server is also reachable at the
+// remote address.  It changes rarely, so poll() reads it every 5 s; clicking it shows the address and the last error.
+const TUNNEL_STATE = {up: ["st-badge--generating", "Tunnel up"], starting: ["st-badge--queued", "Tunnel …"],
+                      failed: ["st-badge--error", "Tunnel failed"], off: ["", "Tunnel off"]};
+let tunnel = null, tunnelTick = 0;
+const tunnelWhere = (t) => `${t.remote}:${t.port} → ${t.local}`;
+function renderTunnel() {
+  const b = $("tunnel-badge");
+  if (!tunnel || !tunnel.enabled) { b.hidden = true; return; }
+  const [cls, label] = TUNNEL_STATE[tunnel.state] || ["", `Tunnel ${tunnel.state}`];
+  b.className = `st-badge ${cls}`;
+  b.hidden = false;
+  $("tunnel-text").textContent = label;
+  b.title = tunnel.state === "up" ? `Reverse SSH up for ${fmt(tunnel.up_s, 0)} s: ${tunnelWhere(tunnel)}` :
+    tunnel.state === "failed" ? `Reverse SSH failed: ${tunnel.error || tunnelWhere(tunnel)}` :
+    `Reverse SSH: ${tunnelWhere(tunnel)}`;
+}
+$("tunnel-badge").onclick = () => {
+  if (!tunnel || !tunnel.enabled) return;
+  if (tunnel.state === "up") {
+    toast("success", "Reverse SSH is up", `${tunnelWhere(tunnel)} · for ${fmt(tunnel.up_s, 0)} s` +
+      (tunnel.restarts ? `, ${fmt(tunnel.restarts)} restarts` : ""), 6000);
+  } else if (tunnel.state === "failed") {
+    toast("error", "Reverse SSH failed", tunnel.error || tunnelWhere(tunnel), 10000);
+  } else {
+    toast("info", `Reverse SSH ${tunnel.state}`, tunnelWhere(tunnel));
+  }
+};
+
 let health = {model: "strata", images: false, max_context: 0};
 async function loadHealth() {
   try {
@@ -118,6 +148,11 @@ async function loadHealth() {
   } catch (e) {
     setTimeout(loadHealth, 2000);
   }
+}
+async function loadTunnel() {
+  try { tunnel = await (await fetch("tunnel", {headers: headers()})).json(); }
+  catch (e) { return; }                        // the server has no /tunnel (an older one): leave the badge as it is
+  renderTunnel();
 }
 
 // ------------------------------------------------------------------ Monitor
@@ -180,6 +215,7 @@ async function poll() {
   } catch (e) {
     if (++metricsFailures === 3) setPill("error", "Server not reachable");
   }
+  if (++tunnelTick % 5 === 0) loadTunnel();                       // the tunnel's state changes rarely: every 5 s
   if (tab === "monitor" && ++mcpTick % 10 === 0) loadMcp();       // server states change rarely: every 10 s
   setTimeout(poll, 1000);
 }
@@ -512,9 +548,13 @@ function inline(s) {
     .replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
   return s.replace(/\u0000(\d+)\u0000/g, (_, i) => `<code class="inline">${esc(codes[+i])}</code>`);
 }
+// a fence whose result is a page of its own: the preview button shows up for these
+const PREVIEWABLE = /^(?:html?|svg)\b/i;
 function codeBlock(lang, code) {
   return `<div class="st-code"><div class="st-code__head"><span>${esc(lang || "code")}</span>` +
-    `<button class="st-btn st-btn--icon" data-code-copy aria-label="Copy code">${icon("copy")}</button></div>` +
+    `<div class="st-code__actions">` +
+    (PREVIEWABLE.test(lang || "") ? `<button class="st-btn st-btn--icon" data-code-preview aria-label="Preview the result" title="Preview">${icon("eye")}</button>` : "") +
+    `<button class="st-btn st-btn--icon" data-code-copy aria-label="Copy code" title="Copy">${icon("copy")}</button></div></div>` +
     `<pre><code>${esc(code)}</code></pre></div>`;
 }
 function blocks(text) {
@@ -719,7 +759,38 @@ function renderChat() {
 function nearBottom() { const s = $("chat-scroll"); return s.scrollHeight - s.scrollTop - s.clientHeight < 120; }
 function scrollDown(force) { const s = $("chat-scroll"); if (force || nearBottom()) s.scrollTop = s.scrollHeight; }
 
+// ------------------------------------------------------------------ code preview
+// The html/svg of an answer renders in a frame of its own. The frame is sandboxed (no same-origin access to this
+// page), so a page from the model cannot read the chat or the API key. Closing it clears the frame to stop any
+// animation it started.
+function openPreview(lang, code) {
+  const head = code.slice(0, 400);
+  const svg = /<svg[\s>]/i.test(head) && !/<html[\s>]/i.test(head);
+  $("preview-frame").srcdoc = svg
+    ? `<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;height:100%}` +
+      `body{display:grid;place-items:center;background:#fff}svg{max-width:100%;max-height:100vh;height:auto}</style>` +
+      `</head><body>${code.replace(/^\s*<\?xml[^>]*\?>\s*/i, "")}</body></html>`
+    : code;
+  $("preview-title").textContent = `${lang || "code"} · preview`;
+  $("preview").hidden = false;
+}
+function closePreview() {
+  const p = $("preview");
+  if (p.hidden) return;
+  p.hidden = true;
+  $("preview-frame").removeAttribute("srcdoc");
+}
+$("preview-close").onclick = closePreview;
+$("preview").addEventListener("click", (e) => { if (e.target === $("preview")) closePreview(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closePreview(); });
+
 $("chat").addEventListener("click", (e) => {
+  const cp = e.target.closest("[data-code-preview]");
+  if (cp) {
+    const blk = cp.closest(".st-code");
+    openPreview(blk.querySelector(".st-code__head > span").textContent, blk.querySelector("pre").textContent);
+    return;
+  }
   const cc = e.target.closest("[data-code-copy]");
   if (cc) { copyText(cc.closest(".st-code").querySelector("pre").textContent, cc); return; }
   const mc = e.target.closest("[data-msg-copy]");
@@ -1096,12 +1167,174 @@ $("drawer-close").onclick = () => openDrawer(false);
 $("scrim").onclick = () => openDrawer(false);
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && $("drawer").dataset.open === "true") openDrawer(false); });
 
+// ------------------------------------------------------------------ chat history (GET /history)
+// The Recent requests card's history button: a read-only browser over every request this server kept.  The
+// records live in .history/ on this PC and are mirrored to the reverse-SSH host (serve/history.py); the list and
+// each conversation are read back from that mirror - nothing here can edit or delete anything.
+let histRows = [], histId = null, histDetail = null;
+const shortModel = (m) => String(m || "").replace(/^qwen3\.8-flash-next-?/, "");
+const dayStr = (t) => {
+  if (t == null) return "–";
+  const d = new Date(t * 1000), now = new Date();
+  const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const hm = d.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
+  const diff = Math.round((day(now) - day(d)) / 86400000);
+  return diff === 0 ? `Today ${hm}` : diff === 1 ? `Yesterday ${hm}`
+    : `${d.toLocaleDateString([], {month: "short", day: "numeric"})} ${hm}`;
+};
+const fullStr = (t) => t == null ? "–" : new Date(t * 1000).toLocaleString([], {year: "numeric", month: "2-digit",
+                                                                                 day: "2-digit", hour: "2-digit", minute: "2-digit"});
+
+function histFail(msg) {
+  histRows = [];
+  histId = null;
+  $("hist-source").hidden = true;
+  $("hist-list").innerHTML = "";
+  $("hist-view").innerHTML = `<p class="hist__empty">${esc(msg)}</p>`;
+}
+async function openHistory() {
+  histId = null;                                   // every open starts again at the most recent conversation
+  $("history").hidden = false;
+  $("hist-view").innerHTML = `<p class="hist__empty">Loading&hellip;</p>`;
+  $("hist-list").innerHTML = "";
+  let data;
+  try {
+    const r = await fetch("history?fresh=1", {headers: headers()});
+    if (r.status === 401) { histFail("This server needs an API key: add it under About > Settings."); return; }
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    data = await r.json();
+  } catch (e) {
+    histFail(`The server did not answer (${e.message}).`);
+    return;
+  }
+  if (data.enabled === false) {
+    histFail("The request history is not set up. It follows the reverse-SSH config (strata-reverse-ssh.json): " +
+             "its \"remote\" and \"password\" are reused, and \"history\": false turns it off.");
+    return;
+  }
+  const b = $("hist-source");
+  b.hidden = false;
+  b.className = "st-badge " + (data.source === "cloud" ? "st-badge--generating" : "st-badge--queued");
+  b.textContent = data.source === "cloud" ? `Cloud · ${data.remote || ""}` : "Local copy";
+  b.title = data.source === "cloud" ? "Conversations are read from the mirror on the reverse-SSH host"
+    : data.error || "The cloud copy could not be read; showing this PC's copy";
+  histRows = data.conversations || [];
+  renderHistList();
+  if (!histRows.length) {
+    $("hist-view").innerHTML = `<p class="hist__empty">No conversations yet.</p>`;
+    return;
+  }
+  showConversation(histRows[0].id);
+}
+function closeHistory() {
+  if (!$("history").hidden) $("history").hidden = true;
+}
+function toggleHistoryList() {
+  const open = $("hist-card").dataset.list === "open";
+  $("hist-card").dataset.list = open ? "closed" : "open";
+  $("hist-list-btn").setAttribute("aria-expanded", String(!open));
+}
+function renderHistList() {
+  $("hist-list").innerHTML =
+    `<div class="hist__inner"><div class="hist__list-head"><span class="card-title" style="font-size:var(--st-fs-sm)">Conversations</span>` +
+    `<span class="muted small">${fmt(histRows.length)} conversation${histRows.length === 1 ? "" : "s"}</span></div>` +
+    `<div class="hist__scroll">` + histRows.map((c) =>
+      `<button class="hist-item" data-id="${esc(c.id)}"${c.id === histId ? ' aria-current="true"' : ""}>` +
+      `<span class="hist-item__line"><span class="hist-item__q">${esc(c.q || "(no question)")}</span>` +
+      `<span class="hist-item__arrow">&rarr;</span>` +
+      `<span class="hist-item__a">${esc(c.a || "(no answer yet)")}</span></span>` +
+      `<span class="hist-item__meta">${esc(dayStr(c.updated))} · ${fmt(c.message_count)} messages · ${esc(shortModel(c.model))}</span>` +
+      `</button>`).join("") + `</div></div>`;
+}
+async function showConversation(id) {
+  histId = id;
+  renderHistList();                                // keep the list's highlight in sync
+  $("hist-view").innerHTML = `<p class="hist__empty">Loading&hellip;</p>`;
+  let data;
+  try {
+    const r = await fetch("history/conversation?id=" + encodeURIComponent(id), {headers: headers()});
+    if (r.status === 404) { $("hist-view").innerHTML = `<p class="hist__empty">This conversation is no longer kept.</p>`; return; }
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    data = await r.json();
+  } catch (e) {
+    $("hist-view").innerHTML = `<p class="hist__empty">Could not load this conversation (${esc(e.message)}).</p>`;
+    return;
+  }
+  if (!data.conversation) { $("hist-view").innerHTML = `<p class="hist__empty">No such conversation.</p>`; return; }
+  histDetail = data.conversation;
+  renderConversation(histDetail);
+}
+function histMsg(m, i) {
+  if (m.role === "user")
+    return `<div class="st-msg st-msg--user" data-hi="${i}"><div class="st-bubble">${esc(m.text)}</div>` +
+      `<div class="st-msg__meta"><span>You${m.time ? " · " + esc(dayStr(m.time)) : ""}</span></div></div>`;
+  if (m.role !== "assistant")
+    return `<div class="st-msg st-msg--assistant" data-hi="${i}"><details class="st-collapse"><summary>` +
+      icon("tool", "st-icon st-icon--sm") + `<span>${esc(m.role === "system" ? "System prompt" : m.role)}</span>` +
+      icon("chevron", "st-icon st-icon--sm st-chev") + `</summary>` +
+      `<div class="st-collapse__body thinking">${esc(m.text)}</div></details></div>`;
+  const think = m.reasoning
+    ? `<details class="st-collapse"><summary>` + icon("thinking", "st-icon st-icon--sm") + `<span>Thinking</span>` +
+      `<span class="muted small">${fmt(m.reasoning.length)} chars</span>` +
+      icon("chevron", "st-icon st-icon--sm st-chev") + `</summary>` +
+      `<div class="st-collapse__body thinking">${esc(m.reasoning)}</div></details>`
+    : "";
+  const bits = [];
+  if (m.time) bits.push(dayStr(m.time));
+  if (m.tokens != null) bits.push(`${fmt(m.tokens)} tok`);
+  if (m.tok_s != null) bits.push(`${fmt(m.tok_s, 1)} tok/s`);
+  return `<div class="st-msg st-msg--assistant" data-hi="${i}">` + think +
+    `<div class="st-bubble">${markdown(m.text || "")}</div>` +
+    `<div class="st-msg__meta"><span>Strata${bits.length ? " · " + esc(bits.join(" · ")) : ""}</span>` +
+    `<button class="st-btn st-btn--icon" data-hist-copy aria-label="Copy the answer" title="Copy">${icon("copy")}</button>` +
+    `</div></div>`;
+}
+function renderConversation(c) {
+  const stats = [shortModel(c.model), `${fmt(c.requests)} request${c.requests === 1 ? "" : "s"}`,
+                 `${fmt(c.message_count)} messages`, fullStr(c.started)];
+  if (c.tokens_in || c.tokens_out) stats.push(`${kfmt(c.tokens_in)} \u2192 ${kfmt(c.tokens_out)} tokens`);
+  if (c.tok_s != null) stats.push(`${fmt(c.tok_s, 1)} tok/s`);
+  if (c.truncated) stats.push("cut at the 256 KB record cap");
+  $("hist-view").innerHTML =
+    `<div class="hist__bar"><div class="hist__title">${esc(c.q || "Conversation")}</div>` +
+    `<div class="hist__meta">${esc(stats.join(" · "))}</div></div>` +
+    `<div class="chat hist__chat">` + (c.messages || []).map(histMsg).join("") + `</div>`;
+  $("hist-view").scrollTop = 0;
+}
+$("history-btn").onclick = openHistory;
+$("hist-close").onclick = closeHistory;
+$("hist-list-btn").onclick = toggleHistoryList;
+$("history").addEventListener("click", (e) => {
+  if (e.target === $("history")) { closeHistory(); return; }
+  const item = e.target.closest(".hist-item");
+  if (item) { showConversation(item.dataset.id); return; }
+  const cp = e.target.closest("[data-code-preview]");
+  if (cp) {
+    const blk = cp.closest(".st-code");
+    openPreview(blk.querySelector(".st-code__head > span").textContent, blk.querySelector("pre").textContent);
+    return;
+  }
+  const cc = e.target.closest("[data-code-copy]");
+  if (cc) { copyText(cc.closest(".st-code").querySelector("pre").textContent, cc); return; }
+  const hc = e.target.closest("[data-hist-copy]");
+  if (hc && histDetail) {
+    const el = hc.closest(".st-msg");
+    const m = histDetail.messages[+el.dataset.hi];
+    if (m) copyText(m.text, hc);
+  }
+});
+// capture: runs before the preview's own Escape handler, so one Esc closes the preview first, the next this popup
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !$("history").hidden && $("preview").hidden) closeHistory();
+}, true);
+
 // ------------------------------------------------------------------ start
 setBusy(false);
 renderChat();
 const startQuestion = new URLSearchParams(location.search).get("q");   // /?q=... starts a chat (a shortcut)
 if (startQuestion) history.replaceState(null, "", location.pathname + location.hash);
 loadHealth().then(loadMcp).then(() => { if (startQuestion) { $("input").value = startQuestion; send(); } });
+loadTunnel();
 showTab(location.hash.slice(1) || "chat");
 poll();
 

@@ -31,6 +31,7 @@
       <svg class="st-icon st-icon--sm"><use href="web/sprite.svg#i-info"/></svg>About</button>
   </nav>
   <span class="st-header__spacer"></span>
+  <span class="st-badge" id="tunnel-badge" role="status" hidden><span id="tunnel-text"></span></span>
   <span class="st-pill" id="pill" data-state="idle" role="status" aria-live="polite">
     <span class="st-pill__dot"></span><span id="pill-text">Connecting&hellip;</span></span>
   <button class="st-btn st-btn--icon" id="theme-btn" title="Light / dark" aria-label="Switch between light and dark">
@@ -137,7 +138,12 @@
         </div>
         <div class="st-card req-card">
           <div class="req-head"><span class="card-title">Recent requests</span>
-            <button class="st-btn st-btn--secondary" id="req-all" hidden>Show all</button></div>
+            <span class="req-head__actions">
+              <button class="st-btn st-btn--icon" id="history-btn" title="Chat history (read-only)"
+                      aria-haspopup="dialog" aria-controls="history">
+                <svg class="st-icon"><use href="web/sprite.svg#i-panel"/></svg></button>
+              <button class="st-btn st-btn--secondary" id="req-all" hidden>Show all</button>
+            </span></div>
           <div class="table-wrap" id="req-wrap">
             <table class="st-table">
               <thead><tr><th>Time</th><th>Status</th><th class="num">Prompt</th><th class="num">Reused</th><th class="num">Output</th>
@@ -261,6 +267,40 @@
   </div>
 </aside>
 <div class="scrim" id="scrim" hidden></div>
+
+<!-- ============================ Code preview ============================ -->
+<div class="preview" id="preview" role="dialog" aria-modal="true" aria-label="Code preview" hidden>
+  <div class="preview__card">
+    <div class="preview__bar">
+      <span class="preview__title" id="preview-title">Preview</span>
+      <span class="st-header__spacer"></span>
+      <button class="st-btn st-btn--icon" id="preview-close" title="Close" aria-label="Close">
+        <svg class="st-icon"><use href="web/sprite.svg#i-close"/></svg></button>
+    </div>
+    <iframe class="preview__frame" id="preview-frame" title="Preview"
+            sandbox="allow-scripts allow-forms allow-modals allow-popups"></iframe>
+  </div>
+</div>
+<!-- ============================ Chat history (read-only) ============================ -->
+<div class="hist" id="history" role="dialog" aria-modal="true" aria-label="Chat history (read-only)" hidden>
+  <div class="hist__card" id="hist-card" data-list="closed">
+    <div class="hist__head">
+      <button class="st-btn st-btn--icon" id="hist-list-btn" title="Show conversations" aria-expanded="false"
+              aria-controls="hist-list">
+        <svg class="st-icon"><use href="web/sprite.svg#i-panel"/></svg></button>
+      <span class="card-title">Chat history</span>
+      <span class="st-badge" title="This view is read-only: nothing can be edited or deleted">Read-only</span>
+      <span class="st-header__spacer"></span>
+      <span class="st-badge" id="hist-source" hidden></span>
+      <button class="st-btn st-btn--icon" id="hist-close" title="Close" aria-label="Close">
+        <svg class="st-icon"><use href="web/sprite.svg#i-close"/></svg></button>
+    </div>
+    <div class="hist__body">
+      <aside class="hist__list" id="hist-list" aria-label="Conversations"></aside>
+      <div class="hist__view" id="hist-view"></div>
+    </div>
+  </div>
+</div>
 <div class="st-toasts" id="toasts" aria-live="polite"></div>
 <script src="web/app.js"></script>
 </body>

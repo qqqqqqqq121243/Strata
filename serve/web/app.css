@@ -11,6 +11,7 @@ main { flex: 1; min-height: 0; display: flex; }
 .card-title { font-weight: var(--st-fw-bold); font-size: var(--st-fs-base); color: var(--st-ink); }
 .st-header { position: relative; z-index: 2; flex: none; }
 .st-header .st-tabs { margin-left: var(--st-s-4); }
+#tunnel-badge { cursor: pointer; }   /* the header's reverse SSH state: clicking it shows the address and the error */
 #drawer-close .st-icon { transform: rotate(-90deg); }
 
 /* ---------------------------------------------------------------- chat */
@@ -169,6 +170,64 @@ main { flex: 1; min-height: 0; display: flex; }
 .st-toast { animation: toast-in 180ms var(--st-ease); }
 @keyframes toast-in { from { opacity: 0; transform: translateY(6px); } }
 
+/* ---------------------------------------------------------------- code preview */
+.st-code__actions { display: flex; align-items: center; gap: 2px; }
+.preview { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center;
+           padding: var(--st-s-6); background: rgba(15, 23, 42, .45); }
+.preview[hidden] { display: none; }
+.preview__card { display: flex; flex-direction: column; width: min(1100px, 100%); height: min(88vh, 100%);
+                 background: var(--st-surface); border: 1px solid var(--st-line); border-radius: var(--st-r-lg);
+                 box-shadow: var(--st-sh-pop); overflow: hidden; }
+.preview__bar { display: flex; align-items: center; gap: var(--st-s-2); padding: 8px 8px 8px 16px;
+                border-bottom: 1px solid var(--st-line); }
+.preview__title { font-size: var(--st-fs-sm); font-weight: 500; color: var(--st-ink-soft); }
+.preview__frame { flex: 1; width: 100%; border: 0; background: #fff; }
+
+/* ---------------------------------------------------------------- chat history (read-only) */
+/* the Recent requests card's history button opens this: a nearly full-screen browser over the requests
+   serve/history.py kept, read from the mirror on the reverse-SSH host.  Messages reuse the chat's .st-msg
+   markup, so they look exactly like the Chat tab. */
+.req-head__actions { display: flex; align-items: center; gap: var(--st-s-2); }
+.hist { position: fixed; inset: 0; z-index: 55; display: flex; align-items: center; justify-content: center;
+        padding: 2vh 2vw; background: rgba(15, 23, 42, .45); }
+.hist[hidden] { display: none; }
+.hist__card { display: flex; flex-direction: column; width: min(1460px, 96vw); height: 94vh; background: var(--st-surface);
+              border: 1px solid var(--st-line); border-radius: var(--st-r-lg); box-shadow: var(--st-sh-pop); overflow: hidden; }
+.hist__head { display: flex; align-items: center; gap: var(--st-s-2); padding: 10px 12px; border-bottom: 1px solid var(--st-line);
+              flex: none; }
+.hist__head .card-title { margin-right: var(--st-s-1); }
+.hist__body { flex: 1; min-height: 0; position: relative; display: grid; grid-template-columns: 0 minmax(0, 1fr);
+              transition: grid-template-columns 220ms var(--st-ease); }
+.hist__card[data-list="open"] .hist__body { grid-template-columns: 340px minmax(0, 1fr); }
+.hist__list { min-width: 0; overflow: hidden; }
+.hist__card[data-list="open"] .hist__list { border-right: 1px solid var(--st-line); }
+.hist__inner { width: 340px; height: 100%; display: flex; flex-direction: column; }
+.hist__list-head { flex: none; display: flex; align-items: center; justify-content: space-between; gap: var(--st-s-2);
+                   padding: 14px 16px 10px; border-bottom: 1px solid var(--st-line-soft); }
+.hist__scroll { flex: 1; overflow-y: auto; padding: var(--st-s-2); }
+.hist-item { display: block; width: 100%; text-align: left; border: 0; background: transparent; border-radius: var(--st-r-md);
+             padding: 10px 12px; cursor: pointer; transition: background var(--st-dur); }
+.hist-item:hover { background: var(--st-surface-2); }
+.hist-item[aria-current="true"] { background: var(--st-accent-tint); }
+.hist-item__line { display: flex; align-items: baseline; gap: 6px; min-width: 0; font-size: var(--st-fs-sm); }
+.hist-item__q { flex: 0 1 auto; min-width: 0; max-width: 58%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+                font-weight: var(--st-fw-medium); color: var(--st-ink); }
+.hist-item__arrow { flex: none; color: var(--st-ink-muted); }
+.hist-item__a { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--st-ink-muted); }
+.hist-item__meta { display: block; margin-top: 3px; font-size: var(--st-fs-xs); color: var(--st-ink-muted);
+                   font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hist__view { min-width: 0; overflow-y: auto; overflow-x: hidden; }
+.hist__bar { position: sticky; top: 0; z-index: 2; background: var(--st-surface); border-bottom: 1px solid var(--st-line-soft);
+             padding: 14px var(--st-s-6) 12px; }
+.hist__title { font-weight: var(--st-fw-bold); font-size: var(--st-fs-lg); line-height: var(--st-lh-tight);
+               overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hist__meta { margin-top: 4px; font-size: var(--st-fs-xs); color: var(--st-ink-muted); font-variant-numeric: tabular-nums;
+              white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hist__chat { padding-top: var(--st-s-6); padding-bottom: var(--st-s-12); }
+.hist__empty { margin: 16vh auto 0; text-align: center; color: var(--st-ink-muted); }
+.hist .st-msg__meta .st-btn--icon { width: 28px; height: 28px; }
+.hist .st-msg__meta .st-btn--icon .st-icon { width: 16px; height: 16px; }
+
 /* ---------------------------------------------------------------- narrow screens */
 @media (max-width: 1000px) {
   .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -183,6 +242,7 @@ main { flex: 1; min-height: 0; display: flex; }
   .st-tab { padding: 0 10px; }
   .st-tab .st-icon { display: none; }
   #pill-text { display: none; }
+  #tunnel-text { display: none; }
   .chat { padding: var(--st-s-5) var(--st-s-4); }
   .composer-wrap { padding: 0 var(--st-s-3) var(--st-s-3); }
   .monitor, .about { padding: var(--st-s-4); }
@@ -197,3 +257,12 @@ main { flex: 1; min-height: 0; display: flex; }
 .img-results figure{margin:0}
 .img-results img{max-width:100%;border-radius:var(--st-r-lg);display:block}
 .img-results figcaption{font-size:var(--st-fs-sm, 13px);color:var(--st-ink-2, inherit);margin-top:4px}
+@media (max-width: 900px) {
+  /* the history popup: full screen, and its conversation list overlays the conversation instead of squeezing it */
+  .hist { padding: 0; }
+  .hist__card { width: 100vw; height: 100%; border-radius: 0; }
+  .hist__card[data-list="open"] .hist__body { grid-template-columns: 0 minmax(0, 1fr); }
+  .hist__card[data-list="open"] .hist__list { position: absolute; left: 0; top: 0; bottom: 0; width: min(340px, 86%);
+                                              z-index: 3; background: var(--st-surface); box-shadow: var(--st-sh-pop); }
+  .hist__bar { padding: 12px var(--st-s-4) 10px; }
+}

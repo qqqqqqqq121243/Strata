@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<!-- 评审用设计模板：Recent requests 卡片上的小按钮 + 聊天历史弹窗（只读）。
+     直接双击本文件即可在浏览器打开；样式复用 Strata 的 tokens.css / components.css。
+     弹窗里的对话是内置示例数据；真实数据计划来自腾讯云服务器（见页面底部说明与脚本里的 TODO）。 -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Strata — Recent requests + chat history (mockup)</title>
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="components.css">
+<style>
+/* 让 Outfit 字体在 file:// 直接打开时也能加载（tokens.css 里的路径是给服务器路由用的） */
+@font-face{font-family:"OutfitLocal";src:url("fonts/outfit-latin-wght.woff2") format("woff2-variations");font-weight:100 900;font-display:swap}
+:root{--st-font:"OutfitLocal","Outfit",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+html[data-locked]{overflow:hidden}
+
+/* ---------------------------------------------------------------- 演示页（仿 Monitor 视图） */
+.demo{max-width:1240px;margin:0 auto;padding:var(--st-s-6);display:flex;flex-direction:column;gap:var(--st-s-4)}
+.demo-head{display:flex;align-items:center;gap:var(--st-s-3);flex-wrap:wrap}
+.demo-head .spacer{flex:1}
+.card-title{font-weight:var(--st-fw-bold);font-size:var(--st-fs-base);color:var(--st-ink)}
+.req-card{display:flex;flex-direction:column;gap:var(--st-s-3);min-width:0}
+.req-head{display:flex;align-items:center;justify-content:space-between;gap:var(--st-s-2)}
+.req-head__actions{display:flex;align-items:center;gap:var(--st-s-2)}
+.demo-note{font-size:var(--st-fs-xs);color:var(--st-ink-muted);margin:0}
+.demo-note code{font:400 .95em var(--st-font-mono)}
+
+/* ---------------------------------------------------------------- 弹窗（几乎全屏） */
+.ch-overlay{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;
+            padding:2vh 2vw;background:rgba(15,23,42,.45)}
+.ch-overlay[hidden]{display:none}
+.ch-modal{display:flex;flex-direction:column;width:min(1460px,96vw);height:94vh;background:var(--st-surface);
+          border:1px solid var(--st-line);border-radius:var(--st-r-lg);box-shadow:var(--st-sh-pop);overflow:hidden}
+.ch-head{display:flex;align-items:center;gap:var(--st-s-2);padding:10px 12px;border-bottom:1px solid var(--st-line);flex:none}
+.ch-head__title{display:flex;align-items:center;gap:10px;min-width:0}
+.ch-head .spacer{flex:1}
+.src-chip{display:inline-flex;align-items:center;gap:7px;height:30px;padding:0 12px;border-radius:var(--st-r-pill);
+           border:1px solid var(--st-line);background:var(--st-surface-2);font-size:var(--st-fs-xs);
+           font-weight:500;color:var(--st-ink-soft);font-variant-numeric:tabular-nums;white-space:nowrap}
+.src-chip__dot{width:8px;height:8px;border-radius:50%;background:var(--st-accent);box-shadow:0 0 0 4px var(--st-accent-tint)}
+.src-chip .st-icon{width:14px;height:14px;color:var(--st-ink-muted)}
+
+/* 主体：左侧对话列表（可展开的“栏”）+ 右侧只读对话 */
+.ch-body{flex:1;min-height:0;position:relative;display:grid;grid-template-columns:0 minmax(0,1fr);
+         transition:grid-template-columns 220ms var(--st-ease)}
+.ch-modal[data-list="open"] .ch-body{grid-template-columns:340px minmax(0,1fr)}
+.ch-list{min-width:0;overflow:hidden}
+.ch-modal[data-list="open"] .ch-list{border-right:1px solid var(--st-line)}
+.ch-list__inner{width:340px;height:100%;display:flex;flex-direction:column}
+.ch-list__head{flex:none;display:flex;align-items:center;justify-content:space-between;gap:var(--st-s-2);
+               padding:14px 16px 10px;border-bottom:1px solid var(--st-line-soft)}
+.ch-list__scroll{flex:1;overflow-y:auto;padding:var(--st-s-2)}
+.ch-item{display:block;width:100%;text-align:left;border:0;background:transparent;border-radius:var(--st-r-md);
+         padding:10px 12px;cursor:pointer;transition:background var(--st-dur)}
+.ch-item:hover{background:var(--st-surface-2)}
+.ch-item[aria-current="true"]{background:var(--st-accent-tint)}
+.ch-item__line{display:flex;align-items:baseline;gap:6px;min-width:0;font-size:var(--st-fs-sm)}
+.ch-item__q{flex:0 1 auto;min-width:0;max-width:58%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+            font-weight:var(--st-fw-medium);color:var(--st-ink)}
+.ch-item__arrow{flex:none;color:var(--st-ink-muted)}
+.ch-item__a{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--st-ink-muted)}
+.ch-item__meta{display:block;margin-top:3px;font-size:var(--st-fs-xs);color:var(--st-ink-muted);
+               font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* 右侧：对话正文（只读） */
+.ch-view{min-width:0;overflow-y:auto;overflow-x:hidden}
+.ch-view__bar{position:sticky;top:0;z-index:2;background:var(--st-surface);border-bottom:1px solid var(--st-line-soft);
+              padding:14px var(--st-s-6) 12px}
+.ch-view__title{font-weight:var(--st-fw-bold);font-size:var(--st-fs-lg);line-height:var(--st-lh-tight);
+                overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ch-view__meta{margin-top:4px;font-size:var(--st-fs-xs);color:var(--st-ink-muted);font-variant-numeric:tabular-nums;
+               white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chat{max-width:860px;margin:0 auto;padding:var(--st-s-6) var(--st-s-6) var(--st-s-12);display:flex;
+      flex-direction:column;gap:var(--st-s-6)}
+.st-msg{width:100%}
+.st-msg--assistant{align-self:flex-start}
+.st-msg--assistant .st-bubble{width:100%}
+.st-msg--user .st-bubble{white-space:pre-wrap;overflow-wrap:anywhere}
+.st-bubble p{margin:0 0 var(--st-s-3)}
+.st-bubble p:last-child{margin-bottom:0}
+.st-bubble code.inline{font:400 .9em var(--st-font-mono);background:var(--st-surface-2);border:1px solid var(--st-line-soft);
+                       border-radius:6px;padding:1px 5px}
+.st-bubble .st-code{margin:var(--st-s-3) 0}
+.st-code__actions{display:flex;align-items:center;gap:2px}
+.st-collapse__body.thinking{white-space:pre-wrap;overflow-wrap:anywhere;max-height:420px;overflow-y:auto}
+.st-msg__meta .st-btn--icon{width:28px;height:28px}
+.st-msg__meta .st-btn--icon .st-icon{width:16px;height:16px}
+.ch-empty{margin:16vh auto 0;text-align:center;color:var(--st-ink-muted)}
+
+/* 窄屏：列表改为盖在正文上的浮层 */
+@media (max-width:900px){
+  .ch-modal{width:100vw;height:100vh;border-radius:0}
+  .ch-modal[data-list="open"] .ch-body{grid-template-columns:0 minmax(0,1fr)}
+  .ch-modal[data-list="open"] .ch-list{position:absolute;left:0;top:0;bottom:0;width:min(340px,86%);z-index:3;
+                                       background:var(--st-surface);box-shadow:var(--st-sh-pop)}
+  .ch-view__bar{padding:12px var(--st-s-4) 10px}
+  .chat{padding:var(--st-s-4) var(--st-s-4) var(--st-s-10)}
+}
+</style>
+</head>
+<body>
+
+<!-- 图标：内联 sprite（file:// 直接打开也能显示；实现时改用 sprite.svg，并补一个“侧栏”图标） -->
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none">
+  <symbol id="i-panel" viewBox="0 0 24 24" fill="none"><path opacity="0.12" d="M3 6C3 4.343 4.343 3 6 3H18C19.657 3 21 4.343 21 6V18C21 19.657 19.657 21 18 21H6C4.343 21 3 19.657 3 18V6Z" fill="currentColor"></path><path d="M3 6C3 4.343 4.343 3 6 3H18C19.657 3 21 4.343 21 6V18C21 19.657 19.657 21 18 21H6C4.343 21 3 19.657 3 18V6Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M9.5 3V21" stroke="currentColor" stroke-width="1.5"></path><path d="M13 7.5H17.5M13 12H17.5M13 16.5H15.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"></path></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24" fill="none"><path d="M6 6L18 18M18 6L6 18" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></symbol>
+  <symbol id="i-chat" viewBox="0 0 24 24" fill="none"><path opacity="0.12" d="M21 11.5C21 16.194 16.971 20 12 20C10.8 20 9.65 19.78 8.6 19.37L4 20.5L5.2 16.8C3.83 15.34 3 13.5 3 11.5C3 6.806 7.029 3 12 3C16.971 3 21 6.806 21 11.5Z" fill="currentColor"></path><path d="M21 11.5C21 16.194 16.971 20 12 20C10.8 20 9.65 19.78 8.6 19.37L4 20.5L5.2 16.8C3.83 15.34 3 13.5 3 11.5C3 6.806 7.029 3 12 3C16.971 3 21 6.806 21 11.5Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M8 11.5H8.01M12 11.5H12.01M16 11.5H16.01" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></symbol>
+  <symbol id="i-thinking" viewBox="0 0 24 24" fill="none"><path opacity="0.12" d="M12 2.5C8.41 2.5 5.5 5.41 5.5 9C5.5 11.3 6.7 13.3 8.5 14.5V16.5C8.5 17.05 8.95 17.5 9.5 17.5H14.5C15.05 17.5 15.5 17.05 15.5 16.5V14.5C17.3 13.3 18.5 11.3 18.5 9C18.5 5.41 15.59 2.5 12 2.5Z" fill="currentColor"></path><path d="M12 2.5C8.41 2.5 5.5 5.41 5.5 9C5.5 11.3 6.7 13.3 8.5 14.5V16.5C8.5 17.05 8.95 17.5 9.5 17.5H14.5C15.05 17.5 15.5 17.05 15.5 16.5V14.5C17.3 13.3 18.5 11.3 18.5 9C18.5 5.41 15.59 2.5 12 2.5Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M9.5 20.5H14.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24" fill="none"><path opacity="0.12" d="M8 10C8 8.895 8.895 8 10 8H18C19.105 8 20 8.895 20 10V18C20 19.105 19.105 20 18 20H10C8.895 20 8 19.105 8 18V10Z" fill="currentColor"></path><path d="M8 10C8 8.895 8.895 8 10 8H18C19.105 8 20 8.895 20 10V18C20 19.105 19.105 20 18 20H10C8.895 20 8 19.105 8 18V10Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M16 8V6C16 4.895 15.105 4 14 4H6C4.895 4 4 4.895 4 6V14C4 15.105 4.895 16 6 16H8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></symbol>
+  <symbol id="i-chevron" viewBox="0 0 24 24" fill="none"><path d="M6 9L12 15L18 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24" fill="none"><path d="M10 13C10.43 13.57 10.98 14.05 11.61 14.39C12.24 14.74 12.93 14.94 13.65 14.99C14.36 15.04 15.08 14.94 15.75 14.69C16.42 14.44 17.03 14.05 17.54 13.54L20.54 10.54C21.45 9.6 21.95 8.33 21.94 7.02C21.93 5.71 21.41 4.46 20.48 3.53C19.55 2.6 18.3 2.08 16.99 2.07C15.68 2.06 14.41 2.56 13.47 3.47L11.75 5.18" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M14 11C13.57 10.43 13.02 9.95 12.39 9.61C11.76 9.26 11.07 9.06 10.35 9.01C9.64 8.96 8.92 9.06 8.25 9.31C7.58 9.56 6.97 9.95 6.46 10.46L3.46 13.46C2.55 14.4 2.05 15.67 2.06 16.98C2.07 18.29 2.59 19.54 3.52 20.47C4.45 21.4 5.7 21.92 7.01 21.93C8.32 21.94 9.59 21.44 10.53 20.53L12.24 18.82" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></symbol>
+</svg>
+
+<!-- ============================ 演示页：仿 Monitor 里的 Recent requests 卡片 ============================ -->
+<div class="demo">
+  <div class="demo-head">
+    <span class="card-title">Strata — 设计模板（评审用）</span>
+    <span class="muted small">Recent requests 卡片上的历史按钮 + 只读聊天历史弹窗</span>
+    <span class="spacer"></span>
+    <button class="st-btn st-btn--secondary" id="open-btn">Open popup</button>
+    <button class="st-btn st-btn--secondary" id="theme-btn">Theme: light</button>
+  </div>
+
+  <div class="st-card req-card">
+    <div class="req-head">
+      <span class="card-title">Recent requests</span>
+      <span class="req-head__actions">
+        <!-- 新增的小按钮：打开聊天历史（只读） -->
+        <button class="st-btn st-btn--icon" id="history-btn" title="Chat history (read-only)"
+                aria-haspopup="dialog" aria-controls="chOverlay">
+          <svg class="st-icon"><use href="#i-panel"></use></svg>
+        </button>
+        <button class="st-btn st-btn--secondary">Show all</button>
+      </span>
+    </div>
+    <div class="table-wrap">
+      <table class="st-table">
+        <thead><tr><th>Time</th><th>Status</th><th class="num">Prompt</th><th class="num">Reused</th><th class="num">Output</th>
+          <th class="num">Tok/s</th><th class="num" title="While writing the answer: the share of the experts looked up that were already in VRAM (experts copied over PCIe are not counted)">Hit rate</th><th class="num">Duration</th></tr></thead>
+        <tbody>
+          <tr><td>14:43</td><td><span class="st-badge">Done</span></td><td class="num">1,208</td><td class="num">512</td><td class="num">486</td><td class="num">7.0</td><td class="num">71%</td><td class="num">72s</td></tr>
+          <tr><td>14:41</td><td><span class="st-badge">Done</span></td><td class="num">1,986</td><td class="num">1,024</td><td class="num">622</td><td class="num">7.2</td><td class="num">74%</td><td class="num">95s</td></tr>
+          <tr><td>14:35</td><td><span class="st-badge">Done</span></td><td class="num">3,214</td><td class="num">2,048</td><td class="num">486</td><td class="num">7.0</td><td class="num">73%</td><td class="num">84s</td></tr>
+          <tr><td>14:32</td><td><span class="st-badge">Done</span></td><td class="num">1,102</td><td class="num">0</td><td class="num">122</td><td class="num">6.8</td><td class="num">69%</td><td class="num">24s</td></tr>
+          <tr><td>21:14</td><td><span class="st-badge">Done</span></td><td class="num">1,742</td><td class="num">1,536</td><td class="num">320</td><td class="num">6.8</td><td class="num">72%</td><td class="num">61s</td></tr>
+          <tr><td>21:10</td><td><span class="st-badge">Done</span></td><td class="num">1,134</td><td class="num">512</td><td class="num">422</td><td class="num">6.9</td><td class="num">70%</td><td class="num">70s</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <p class="demo-note">点击 Recent requests 标题右侧的小按钮打开弹窗（页面加载时会自动打开一次；Esc 或点遮罩可关闭）。</p>
+  <p class="demo-note">弹窗里是内置的示例数据，尚未接真实数据源；计划把每次请求的全部内容（提问 + 回答 + 思考）存到腾讯云服务器上，弹窗只读展示，不能改也不能删。</p>
+</div>
+
+<!-- ============================ 聊天历史弹窗（几乎全屏，只读） ============================ -->
+<div class="ch-overlay" id="chOverlay" hidden>
+  <section class="ch-modal" id="chModal" role="dialog" aria-modal="true" aria-label="Chat history (read-only)" data-list="closed">
+    <header class="ch-head">
+      <!-- 左上角按钮：展开 / 收起对话列表 -->
+      <button class="st-btn st-btn--icon" id="list-btn" title="Show conversations" aria-expanded="false" aria-controls="chList">
+        <svg class="st-icon"><use href="#i-panel"></use></svg>
+      </button>
+      <div class="ch-head__title">
+        <span class="card-title">Chat history</span>
+        <span class="st-badge" title="This view is read-only: nothing can be edited or deleted">Read-only</span>
+      </div>
+      <span class="spacer"></span>
+      <!-- 数据来源：腾讯云服务器（规划） -->
+      <span class="src-chip" title="Conversations are stored on the Tencent Cloud server">
+        <span class="src-chip__dot"></span>
+        <svg class="st-icon"><use href="#i-link"></use></svg>
+        134.175.144.49 · cloud
+      </span>
+      <button class="st-btn st-btn--icon" id="close-btn" title="Close" aria-label="Close">
+        <svg class="st-icon"><use href="#i-close"></use></svg>
+      </button>
+    </header>
+
+    <div class="ch-body">
+      <!-- 左侧栏：一行一条对话概要（第一次提问 → 最后一次回答） -->
+      <aside class="ch-list" id="chList" aria-label="Conversations">
+        <div class="ch-list__inner">
+          <div class="ch-list__head">
+            <span class="card-title" style="font-size:var(--st-fs-sm)">Conversations</span>
+            <span class="muted small" id="conv-count"></span>
+          </div>
+          <div class="ch-list__scroll" id="conv-list"></div>
+        </div>
+      </aside>
+
+      <!-- 右侧：选中的对话，只读 -->
+      <div class="ch-view" id="chView"></div>
+    </div>
+  </section>
+</div>
+
+<script>
+/* ------------------------------------------------------------------------------------------------ 数据
+   评审模板：以下为内置示例数据。接入真实数据时，把 loadConversations() 换成从腾讯云服务器拉取：
+     const convs = await (await fetch(API_BASE + "/history/conversations")).json();
+   服务端已有的 /api/requests 只是内存里最近 100 条（retention=100, persistent=false），
+   持久化 + 上传到云端是后续要做的部分。 */
+const API_BASE = "";  /* TODO: 腾讯云服务器上的历史接口地址 */
+
+const MOCK = [
+  {
+    id: "c1", model: "qwen3.8-flash-next-swift-iq3_xxs", started: "2026-10-03T14:32:00", updated: "2026-10-03T14:43:00",
+    requests: 4, tokens_in: 3214, tokens_out: 1108, tok_s: 7.1,
+    q: "ssh -R 8088:localhost:8080 root@134.175.144.49 为什么不行？",
+    a: "定位是本地这一跳：改成 127.0.0.1 后隧道恢复正常，以后用系统自带的 reverse_ssh 自动重连。",
+    messages: [
+      {role: "user", time: "14:32", text: "ssh -R 8088:localhost:8080 root@134.175.144.49 为什么不行？远端 8088 能连上，但浏览器打不开。"},
+      {role: "assistant", time: "14:35", tokens: 486, tok_s: 7.0,
+       thinking: "先分开两种失败：1) ssh 本身没连上；2) 隧道建立了但转发目标连不上。\n远端 8088 的 TCP 能从外面连通，说明隧道在、GatewayPorts 也已放行，问题大概率在本机这一跳。\nWindows 上 localhost 会先解析成 IPv6 ::1，而本地服务只监听 127.0.0.1 —— 转发目标连不上，远端就会立刻收到空响应。",
+       html: "<p>已定位：<code class=\"inline\">localhost</code> 在 Windows 上被解析成 IPv6 <code class=\"inline\">::1</code>，" +
+             "而你的服务只监听 <code class=\"inline\">127.0.0.1</code>（IPv4）。隧道和云端都是好的，断在本地这一跳。</p>" +
+             codeBlock("bash", "ssh -R 8088:127.0.0.1:8080 root@134.175.144.49") +
+             "<p>先结束旧会话（它还占着远端 8088），再用上面这条重跑即可。</p>"},
+      {role: "user", time: "14:41", text: "那我想做成开机自动重连，用 autossh 还是别的？"},
+      {role: "assistant", time: "14:43", tokens: 622, tok_s: 7.2,
+       html: "<p>不用额外装东西：Strata 自带这个功能。在 <code class=\"inline\">strata-reverse-ssh.json</code> 里把 " +
+             "<code class=\"inline\">enabled</code> 设成 <code class=\"inline\">true</code>、填好 <code class=\"inline\">remote</code> 和 " +
+             "<code class=\"inline\">password</code>，服务器启动时就会拉起隧道，断线按退避策略自动重连，还会在页头显示状态徽标。</p>" +
+             "<p>注意转发目标写 <code class=\"inline\">127.0.0.1:8080</code>，不要写 localhost。</p>"}
+    ]
+  },
+  {
+    id: "c2", model: "qwen3.8-flash-next-swift-iq3_xxs", started: "2026-10-02T21:10:00", updated: "2026-10-02T21:14:00",
+    requests: 2, tokens_in: 2876, tokens_out: 742, tok_s: 6.8,
+    q: "上下文从 128K 提到 256K 后，提交余量从 1.75GB 掉到 0.7GB，值得吗？",
+    a: "不建议：IQ3_XXS 权重就占约 60GB，少掉的全是内存余量；日常保持 128K 最稳。",
+    messages: [
+      {role: "user", time: "21:10", text: "把上下文从 128K 提到 256K 后，提交余量从 1.75GB 掉到 0.7GB，物理内存可用从 7.06GB 到 5.8GB，值得吗？"},
+      {role: "assistant", time: "21:12", tokens: 422, tok_s: 6.9,
+       html: "<p>不建议。显存占用和输出速度基本不变，少掉的 1GB 多全是内存余量，而 IQ3_XXS 本身就要约 60GB。</p>" +
+             "<p>256K 只有处理超长文档时才用得上；日常对话 128K 足够，也更安全。</p>"},
+      {role: "user", time: "21:13", text: "那扩页面文件 / 换 IQ2_XS / 加内存条，选哪个？"},
+      {role: "assistant", time: "21:14", tokens: 320, tok_s: 6.8,
+       html: "<p>优先级：加内存条 &gt; 换 IQ2_XS（质量降一档，但能换回约 12GB 余量）&gt; 扩页面文件（治标，突发时还是会顶住）。</p>" +
+             "<p>短期内先保持 128K 就好。</p>"}
+    ]
+  },
+  {
+    id: "c3", model: "qwen3.8-flash-next-swift-iq3_xxs", started: "2026-10-02T16:45:00", updated: "2026-10-02T16:52:00",
+    requests: 3, tokens_in: 5021, tokens_out: 1930, tok_s: 7.3,
+    q: "Strata 落后 6 个版本了，升级要不要重下 71GB 的模型？",
+    a: "不用重下：只换引擎（约 118.7MB），GGUF、pack、MTP 草稿层都复用；升完解码快 6–17%。",
+    messages: [
+      {role: "user", time: "16:45", text: "Strata 落后 6 个版本了，升级会不会要重下 71GB 的模型文件？"},
+      {role: "assistant", time: "16:48", tokens: 812, tok_s: 7.3,
+       html: "<p>不用。升级只换引擎本体（约 118.7MB）：71GB 的 GGUF、模型 pack、4.86GB 的 MTP 草稿层都能直接复用。</p>" +
+             "<p>GitHub 直连被墙，引擎包走代理下载；git 仓库用预取好的 commit 做 fast-forward 合并就行。</p>"},
+      {role: "user", time: "16:51", text: "升级完怎么确认没有退化？"},
+      {role: "assistant", time: "16:52", tokens: 1118, tok_s: 7.3,
+       html: "<p>跑一轮基准对比：解码快了 6–17%，128K 上下文稳定。</p>" +
+             "<p>新增了 MCP server 和空闲卸载；旧引擎留在 <code class=\"inline\">_prebuilt</code> 里，随时可回滚。</p>"}
+    ]
+  },
+  {
+    id: "c4", model: "qwen3.8-flash-next-swift-iq3_xxs", started: "2026-10-01T11:20:00", updated: "2026-10-01T11:24:00",
+    requests: 1, tokens_in: 1204, tokens_out: 305, tok_s: 6.9,
+    q: "MTP 那 4.86GB 的草稿层怎么验证有没有损坏？",
+    a: "跑 mtp_fetch.py verify，按分片哈希逐块校验；通过后再挂给引擎，否则会悄悄拖慢解码。",
+    messages: [
+      {role: "user", time: "11:20", text: "MTP 那 4.86GB 的草稿层怎么验证有没有损坏？"},
+      {role: "assistant", time: "11:24", tokens: 305, tok_s: 6.9,
+       html: "<p>跑 <code class=\"inline\">mtp_fetch.py verify</code>，它会按分片哈希逐块校验。</p>" +
+             "<p>校验通过后再挂到引擎上；草稿层损坏不会报错，只会让解码速度悄悄变慢，所以复用前一定要验一遍。</p>"}
+    ]
+  },
+  {
+    id: "c5", model: "qwen3.8-flash-next-swift-iq3_xxs", started: "2026-10-01T09:05:00", updated: "2026-10-01T09:21:00",
+    requests: 2, tokens_in: 1566, tokens_out: 812, tok_s: 7.0,
+    q: "写个小脚本，把 JSONL 按日期归档到按月文件夹，并生成 README。",
+    a: "写好了：按文件名里的日期分组归档，并生成记录来源和条数的 README。",
+    messages: [
+      {role: "user", time: "09:05", text: "写个小脚本，把 JSONL 按日期归档到按月文件夹，并生成 README。"},
+      {role: "assistant", time: "09:09", tokens: 812, tok_s: 7.0,
+       html: "<p>可以，按文件名里的日期分组就行：</p>" +
+             codeBlock("python", "import re, shutil\nfrom pathlib import Path\n\nfor f in Path(\"data\").glob(\"*.jsonl\"):\n    m = re.search(r\"(\\d{4})(\\d{2})\\d{2}\", f.stem)\n    if not m:\n        continue\n    out = Path(\"archive\", m[1] + m[2])      # archive/202610\n    out.mkdir(parents=True, exist_ok=True)\n    shutil.move(str(f), out / f.name)") +
+             "<p>跑完每月一个文件夹；README 里记录每月的条数和来源。</p>"}
+    ]
+  },
+  {
+    id: "c6", model: "qwen3.8-flash-next-swift-iq3_xxs", started: "2026-09-30T20:14:00", updated: "2026-09-30T20:18:00",
+    requests: 1, tokens_in: 942, tokens_out: 264, tok_s: 7.2,
+    q: "Open WebUI 怎么连到本机的 Strata？",
+    a: "OpenAI 兼容接口：base URL 填 http://127.0.0.1:8080/v1，模型名随便填，没有 key 就填任意值。",
+    messages: [
+      {role: "user", time: "20:14", text: "Open WebUI 怎么连到本机的 Strata？"},
+      {role: "assistant", time: "20:18", tokens: 264, tok_s: 7.2,
+       html: "<p>OpenAI 兼容接口：base URL 填 <code class=\"inline\">http://127.0.0.1:8080/v1</code>，模型名随意（服务端会忽略），没有配 API key 就填任意值。</p>"}
+    ]
+  },
+  {
+    id: "c7", model: "qwen3.8-flash-next-swift-iq3_xxs", started: "2026-09-30T15:02:00", updated: "2026-09-30T15:05:00",
+    requests: 1, tokens_in: 331, tokens_out: 48, tok_s: 7.2,
+    q: "帮我跑一次基准，看看解码速度。",
+    a: "48 tokens at 7.2 tok/s（prompt 331 tok/s），共 6.7 s。",
+    messages: [
+      {role: "user", time: "15:02", text: "帮我跑一次基准，看看解码速度。"},
+      {role: "assistant", time: "15:05", tokens: 48, tok_s: 7.2,
+       html: "<p>48 tokens at 7.2 tok/s（prompt 331 tok/s），共 6.7 s；温度 0、关闭思考、固定短故事提示。</p>"}
+    ]
+  },
+  {
+    id: "c8", model: "qwen3.8-flash-next-swift-iq3_xxs", started: "2026-09-29T22:40:00", updated: "2026-09-29T22:47:00",
+    requests: 2, tokens_in: 2120, tokens_out: 688, tok_s: 6.7,
+    q: "strata 新的那个 MCP 有什么用？",
+    a: "它是给 AI 助手用的 MCP 服务器：status / install / start / stop / logs / benchmark / connect_info，用自然语言管理 Strata。",
+    messages: [
+      {role: "user", time: "22:40", text: "strata 新的那个 MCP 有什么用？"},
+      {role: "assistant", time: "22:47", tokens: 688, tok_s: 6.7,
+       html: "<p>它是给 AI 助手（Claude Code、Cursor、VS Code 等）用的 MCP 服务器，暴露 8 个工具：</p>" +
+             "<p><code class=\"inline\">strata_status</code>、<code class=\"inline\">strata_models</code>、" +
+             "<code class=\"inline\">strata_install</code>、<code class=\"inline\">strata_start</code>、" +
+             "<code class=\"inline\">strata_stop</code>、<code class=\"inline\">strata_logs</code>、" +
+             "<code class=\"inline\">strata_benchmark</code>、<code class=\"inline\">strata_connect_info</code>。</p>" +
+             "<p>和 <code class=\"inline\">serve/mcp.py</code> 方向相反：那个是模型在聊天页里调用你的工具，这个是助手来管理 Strata。</p>"}
+    ]
+  }
+];
+
+/* TODO(接入云端): 现在返回内置示例；将来从腾讯云服务器读取。 */
+async function loadConversations() {
+  return MOCK;
+}
+
+/* ------------------------------------------------------------------------------------------------ 小工具 */
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+
+function codeBlock(lang, code) {
+  return '<div class="st-code"><div class="st-code__head"><span>' + esc(lang) + '</span>' +
+         '<span class="st-code__actions"><button class="st-btn st-btn--icon" data-copy title="Copy">' +
+         '<svg class="st-icon st-icon--sm"><use href="#i-copy"></use></svg></button></span></div>' +
+         '<pre>' + esc(code) + '</pre></div>';
+}
+
+const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+function relTime(iso) {                       /* Today 14:43 / Yesterday 21:10 / Oct 1 11:24 */
+  const d = new Date(iso), now = new Date();
+  const hhmm = String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+  const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diff = Math.round((day(now) - day(d)) / 86400000);
+  if (diff === 0) return "Today " + hhmm;
+  if (diff === 1) return "Yesterday " + hhmm;
+  return MONTHS[d.getMonth()] + " " + d.getDate() + " " + hhmm;
+}
+function fullTime(iso) {
+  const d = new Date(iso);
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0") +
+         " " + String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+}
+const shortModel = (m) => m.replace("qwen3.8-flash-next-", "").replace("qwen3.8-flash-next", "qwen");
+
+/* ------------------------------------------------------------------------------------------------ 渲染 */
+let CONVS = [];
+let current = null;
+
+function messageHtml(m) {
+  if (m.role === "user")
+    return '<div class="st-msg st-msg--user"><div class="st-bubble">' + esc(m.text) + '</div>' +
+           '<div class="st-msg__meta"><span>You · ' + esc(m.time) + '</span></div></div>';
+  const thinking = m.thinking
+    ? '<details class="st-collapse"><summary><svg class="st-icon st-icon--sm"><use href="#i-thinking"></use></svg>' +
+      '<span>Thinking</span><span class="muted small">' + (m.thinking.length) + ' chars</span>' +
+      '<svg class="st-chev st-icon st-icon--sm"><use href="#i-chevron"></use></svg></summary>' +
+      '<div class="st-collapse__body thinking">' + esc(m.thinking) + '</div></details>'
+    : "";
+  const stats = [];
+  if (m.tokens) stats.push(m.tokens + " tok");
+  if (m.tok_s) stats.push(m.tok_s + " tok/s");
+  return '<div class="st-msg st-msg--assistant">' + thinking +
+         '<div class="st-bubble">' + (m.html || esc(m.text)) + '</div>' +
+         '<div class="st-msg__meta"><span>Strata · ' + esc(m.time) + '</span>' +
+         (stats.length ? '<span>·</span><span>' + stats.join(" · ") + '</span>' : '') +
+         '<button class="st-btn st-btn--icon" data-copy title="Copy answer">' +
+         '<svg class="st-icon st-icon--sm"><use href="#i-copy"></use></svg></button></div></div>';
+}
+
+function renderList() {
+  $("conv-count").textContent = CONVS.length + " conversations";
+  $("conv-list").innerHTML = CONVS.map((c) =>
+    '<button class="ch-item" data-id="' + c.id + '"' + (c.id === current ? ' aria-current="true"' : '') + '>' +
+      '<span class="ch-item__line">' +
+        '<span class="ch-item__q">' + esc(c.q) + '</span>' +
+        '<span class="ch-item__arrow">→</span>' +
+        '<span class="ch-item__a">' + esc(c.a) + '</span>' +
+      '</span>' +
+      '<span class="ch-item__meta">' + esc(relTime(c.updated)) + ' · ' + c.messages.length + ' messages · ' +
+        esc(shortModel(c.model)) + '</span>' +
+    '</button>').join("");
+}
+
+function renderView(id) {
+  const c = CONVS.find((x) => x.id === id);
+  if (!c) { $("chView").innerHTML = '<p class="ch-empty">No conversation selected.</p>'; return; }
+  $("chView").innerHTML =
+    '<div class="ch-view__bar">' +
+      '<div class="ch-view__title">' + esc(c.q) + '</div>' +
+      '<div class="ch-view__meta">' + esc(c.model) + ' · ' + c.requests + ' requests · ' + c.messages.length +
+      ' messages · ' + esc(fullTime(c.started)) + ' · ' + (c.tokens_in + c.tokens_out).toLocaleString() +
+      ' tokens · avg ' + c.tok_s + ' tok/s</div>' +
+    '</div>' +
+    '<div class="chat">' + c.messages.map(messageHtml).join("") + '</div>';
+  $("chView").scrollTop = 0;
+}
+
+function select(id) {
+  current = id;
+  renderList();
+  renderView(id);
+}
+
+/* ------------------------------------------------------------------------------------------------ 弹窗交互 */
+function openModal() {
+  $("chOverlay").hidden = false;
+  document.documentElement.setAttribute("data-locked", "");
+}
+function closeModal() {
+  $("chOverlay").hidden = true;
+  document.documentElement.removeAttribute("data-locked");
+}
+function toggleList() {
+  const open = $("chModal").dataset.list === "open";
+  $("chModal").dataset.list = open ? "closed" : "open";
+  $("list-btn").setAttribute("aria-expanded", String(!open));
+}
+
+$("open-btn").onclick = openModal;
+$("history-btn").onclick = openModal;
+$("close-btn").onclick = closeModal;
+$("list-btn").onclick = toggleList;
+$("chOverlay").addEventListener("click", (e) => { if (e.target === $("chOverlay")) closeModal(); });
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !$("chOverlay").hidden) closeModal();
+});
+
+/* 列表点选 / 复制按钮（事件委托） */
+$("chOverlay").addEventListener("click", (e) => {
+  const item = e.target.closest(".ch-item");
+  if (item) { select(item.dataset.id); return; }
+  const copy = e.target.closest("[data-copy]");
+  if (copy) {
+    const root = copy.closest(".st-code") || copy.closest(".st-msg");
+    const text = root ? root.textContent.trim() : "";
+    if (navigator.clipboard) navigator.clipboard.writeText(text).catch(() => {});
+  }
+});
+
+/* 演示页的深浅色切换（仅模板用；正式界面跟随应用主题） */
+$("theme-btn").onclick = () => {
+  const dark = document.documentElement.getAttribute("data-theme") === "dark";
+  if (dark) document.documentElement.removeAttribute("data-theme");
+  else document.documentElement.setAttribute("data-theme", "dark");
+  $("theme-btn").textContent = "Theme: " + (dark ? "light" : "dark");
+};
+
+/* ------------------------------------------------------------------------------------------------ 启动 */
+(async () => {
+  CONVS = await loadConversations();
+  select(CONVS.length ? CONVS[0].id : null);     /* 第一次打开：最近一次对话 */
+  openModal();                                   /* 评审模板自动打开一次 */
+})();
+</script>
+</body>
+</html>

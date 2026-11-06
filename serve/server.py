@@ -4,7 +4,8 @@
     python -m serve.server --engine strata --config strata.json --port 8080   (the real engine, resident)
 
 Endpoints: POST /v1/chat/completions (OpenAI, stream and non-stream), POST /v1/messages (Anthropic, stream and
-non-stream), GET /v1/models, GET /models, GET /props, GET /slots, GET /health, GET /mcp. One sequence at a time behind a FIFO (plan: one resident sequence).
+non-stream), GET /v1/models, GET /models, GET /props, GET /slots, GET /health, GET /mcp, GET /tunnel, GET /history,
+GET /history/conversation. One sequence at a time behind a FIFO (plan: one resident sequence).
 Image generation (optional, when the config has an "images" section): POST /v1/images/generations (OpenAI's shape,
 plus seed and steps) runs stable-diffusion.cpp's sd-cli for Qwen-Image-2.1-Turbo, one job at a time on the GPU the
 text engine uses (serve/images.py).
@@ -28,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import atexit
 import collections
 import base64
 import hashlib
@@ -80,6 +82,9 @@ from serve import owner_guard  # noqa: E402
 from serve import launch_identity  # noqa: E402
 from serve import logit_bias as bias_api  # noqa: E402
 from serve import lifeline  # noqa: E402
+from serve.reverse_ssh import DEFAULT_CONFIG as REVERSE_SSH_CONFIG, ReverseSSH  # noqa: E402
+from serve.history import History  # noqa: E402
+from serve.winjob import contain  # noqa: E402
 from serve.structured import StructuredOutputError, prepare_format, validated_json  # noqa: E402
 from serve import responses as responses_api  # noqa: E402
 from serve.responses import ResponsesError, error_body as responses_error_body  # noqa: E402
@@ -272,6 +277,7 @@ KEEPALIVE_S = 10.0          # a held-back tool argument leaves the stream quiet:
 # Anthropic clients add /v1/messages to their base URL themselves. A base URL that already ends in /v1 (copied from an OpenAI-style
 # setup) makes them post /v1/v1/messages; these two paths mean the same as the real ones. Nothing else is aliased.
 V1_V1_ALIASES = {"/v1/v1/messages": "/v1/messages", "/v1/v1/messages/count_tokens": "/v1/messages/count_tokens"}
+TUNNEL_HOST = "tx.lakewander.space"   # this install's reverse SSH tunnel (serve/reverse_ssh.py): always allowed
 CTX_SLACK = 8               # `strata --serve` rejects prompt + max_new + 8 > context: keep the same margin here
 # The live tok/s is a rate over a window, not a mean since the first token: a mean reads ~1/elapsed at the first
 # token (the Monitor showed five-digit numbers) and then undershoots for the first second of every answer.
@@ -3899,6 +3905,7 @@ class Service:
         self.mcp = None                                  # serve/mcp.py's McpHub when MCP servers are configured
         self.offline = False                             # no image URL fetch or MCP subprocess in strict local mode
         self.telemetry_key = ""                         # optional read-only key, valid only on /v1/telemetry
+        self.request_history = None                      # serve/history.py's History when the mirror is configured
         # sharing the GPU with other programs (all off by default): unload the engine after this many idle seconds,
         # only start it again when this much VRAM is free, and run this command first (e.g. to unload another
         # server's model); the next request after an unload starts the engine again
@@ -4565,8 +4572,8 @@ class Service:
         return getattr(self.engine, "prefill_tok_s_mean", None) if reading else 0.0
 
     def begin_request(self, path, req):
-        """#332: a monitor record for this request, or None when the monitor is off (nothing is kept then)."""
-        if not self.api_monitor:
+        """#332: the record for this request, or None when neither the monitor nor the request history keeps one."""
+        if not self.api_monitor and self.request_history is None:
             return None
         raw = json.dumps(req, ensure_ascii=False, indent=2)
         record = {"id": uuid.uuid4().hex[:12], "path": path, "model": req.get("model") or self.model,
@@ -6626,6 +6633,33 @@ def make_handler(svc: Service):
                 if self._authorized():
                     self._json(200, svc.mcp.status() if svc.mcp else {"servers": [], "tools": 0})
                 return
+            if path == "/tunnel":
+                # the reverse SSH tunnel's state (the web app's header badge; see serve/reverse_ssh.py)
+                if self._authorized():
+                    tunnel = getattr(svc, "tunnel", None)
+                    self._json(200, tunnel.status() if tunnel else {"enabled": False, "state": "off"})
+                return
+            if path == "/history":
+                # the request history's conversations (serve/history.py): read-only, from the mirror on the
+                # reverse-SSH host - the web app's Recent requests card browses them (?fresh=1: read it again)
+                if self._authorized():
+                    fresh = parse_qs(urlsplit(self.path).query).get("fresh", ["0"])[0] == "1"
+                    self._json(200, svc.request_history.overview(fresh=fresh) if svc.request_history
+                               else {"enabled": False})
+                return
+            if path == "/history/conversation":
+                if self._authorized():
+                    history = svc.request_history
+                    if history is None or not history.enabled:
+                        self._json(200, {"enabled": False})
+                        return
+                    cid = parse_qs(urlsplit(self.path).query).get("id", [None])[0]
+                    data = history.conversation(cid)
+                    if data is None:
+                        self._json(404, {"error": {"message": "no such conversation"}})
+                    else:
+                        self._json(200, data)
+                return
             if path == "" or (path == "/api-monitor" and svc.api_monitor):
                 body = (ROOT / "serve" / "web" / ("monitor.html" if path else "index.html")).read_bytes()
                 self.send_response(200)
@@ -6904,6 +6938,8 @@ def make_handler(svc: Service):
                         record["finished_at"] = time.time()
                         record["state"] = "error" if record.get("error") else record.get("outcome", "completed")
                     svc.request_trace.record = None
+                    if svc.request_history is not None:
+                        svc.request_history.append(record)   # serve/history.py: spool + mirror to the cloud host
 
         def _images(self, req):
             """POST /v1/images/generations (serve/images.py): one sd-cli job in the GPU's turn."""
@@ -8210,6 +8246,10 @@ def main(argv=None, *, lifecycle_event=None, interrupt_exit_code: int = 0) -> in
                     help="data-parallel replicas (opt-in): cut the \"gpu\" list into N equal groups and run one engine on "
                          "each, requests spread over them (also \"replicas\" in the config: a number, or "
                          "[{\"gpus\": [0, 1]}, {\"gpus\": [2, 3]}])")
+    ap.add_argument("--reverse-ssh", default=str(REVERSE_SSH_CONFIG), metavar="JSON",
+                    help="a reverse SSH tunnel, so this server is reachable at a remote address: the JSON file to read "
+                         "(serve/reverse_ssh.py documents its keys), started at boot when it has \"enabled\": true "
+                         f"(default: {REVERSE_SSH_CONFIG.name}; GET /tunnel and the web app's header show its state)")
     launch_args = list(sys.argv[1:] if argv is None else argv)
     a = ap.parse_args(launch_args)
     if a.engine == "strata" and (_rt := rttime_limit_note()):   # #3238: say it before the first unexplained -9
@@ -8513,6 +8553,9 @@ def main(argv=None, *, lifecycle_event=None, interrupt_exit_code: int = 0) -> in
         svc.allowed_hosts = allowed_hosts_of(cfg.get("allowed_hosts"), os.environ.get("STRATA_ALLOWED_HOSTS", ""))
     except ValueError as e:
         raise SystemExit(f"[strata] config {e}")
+    # the reverse SSH tunnel's public name: requests arriving through it carry this Host, not a loopback one
+    if TUNNEL_HOST not in svc.allowed_hosts:
+        svc.allowed_hosts.append(TUNNEL_HOST)
     if svc.allowed_hosts:
         print("[strata] Host check off: any name reaches this server (allowed_hosts \"*\")" if "*" in svc.allowed_hosts
               else f"[strata] also answers to the host names {', '.join(svc.allowed_hosts)} (allowed_hosts)", flush=True)
@@ -8606,7 +8649,6 @@ def main(argv=None, *, lifecycle_event=None, interrupt_exit_code: int = 0) -> in
         except (OSError, ValueError):
             svc.shared = {}
     if hub is not None:
-        import atexit
         svc.mcp = hub
         print(f"[strata] starting {len(hub.servers)} MCP server{'s' * (len(hub.servers) != 1)} for the web app's "
               f"chat: {', '.join(hub.servers)}", flush=True)
@@ -8614,6 +8656,25 @@ def main(argv=None, *, lifecycle_event=None, interrupt_exit_code: int = 0) -> in
         atexit.register(hub.close)                      # the servers Strata started end with it
     httpd = serve(svc, host=a.host, port=a.port)
     bound_port = httpd.server_address[1]               # --port 0: report the port the OS actually assigned
+    # the reverse tunnel forwards to this server's own port unless the file names another one
+    tunnel = ReverseSSH.from_config(a.reverse_ssh)
+    if tunnel.enabled and not tunnel.local_port:
+        tunnel.local_port = bound_port
+    svc.tunnel = tunnel
+    if tunnel.enabled:
+        print(f"[strata] reverse SSH: {tunnel.remote}:{tunnel.port} -> {tunnel.local()} (state at GET /tunnel)",
+              flush=True)
+    tunnel.start()
+    # the request history (serve/history.py): every request's content in .history/, mirrored over ssh to the
+    # reverse-SSH host; the web app's Recent requests card reads it back (GET /history)
+    request_history = History.from_config(a.reverse_ssh)
+    svc.request_history = request_history
+    if request_history.enabled:
+        print(f"[strata] request history: {request_history.spool} -> "
+              f"{request_history.remote}:{request_history.remote_dir}", flush=True)
+    request_history.start()
+    atexit.register(request_history.stop)
+    atexit.register(tunnel.stop)                        # the ssh process ends with this server, not on its own
     svc.start_idle_unload()
     svc.start_vision_idle()
     here = "127.0.0.1" if a.host in ("0.0.0.0", "", "::") else a.host
@@ -8685,7 +8746,7 @@ def main(argv=None, *, lifecycle_event=None, interrupt_exit_code: int = 0) -> in
                 print(f"[strata] drain deadline expired; cancelling {cancelled} owned request(s) ...", flush=True)
                 svc.wait_for_drain(5)
                 drained = False
-        closers = [httpd.shutdown, getattr(engine, "close", None), vision.shutdown if vision else None,
+        closers = [httpd.shutdown, tunnel.stop, getattr(engine, "close", None), vision.shutdown if vision else None,
                    hub.close if hub is not None else None]
         try:
             for close in filter(None, closers):
